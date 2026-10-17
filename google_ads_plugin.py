@@ -133,6 +133,220 @@ def gads_campaign_performance(customer_id: str, date_range: str = "LAST_30_DAYS"
         "campaigns": campaigns
     }
 
+def gads_product_performance(
+    customer_id: str,
+    campaign_id: Optional[str] = None,
+    sku: Optional[str] = None,
+    date_range: str = "LAST_30_DAYS",
+    min_spend: float = 0.0,
+    status_filter: str = "ALL",
+    sort_by: str = "spend",
+    limit: int = 50
+) -> Dict[str, Any]:
+    """Query product/listing performance from shopping_performance_view by SKU."""
+    clean_cid = customer_id.replace("-", "")
+    valid_ranges = ["TODAY", "YESTERDAY", "LAST_7_DAYS", "LAST_14_DAYS", "LAST_30_DAYS", "THIS_MONTH", "LAST_MONTH"]
+    date_clause = date_range if date_range in valid_ranges else "LAST_30_DAYS"
+
+    where_clauses = [f"segments.date DURING {date_clause}"]
+    if campaign_id:
+        where_clauses.append(f"campaign.id = {str(campaign_id).strip()}")
+    if sku:
+        where_clauses.append(f"segments.product_item_id = '{str(sku).strip()}'")
+    if min_spend and float(min_spend) > 0:
+        where_clauses.append(f"metrics.cost_micros >= {int(float(min_spend) * 1_000_000)}")
+
+    where_str = " AND ".join(where_clauses)
+    query = f"""
+    SELECT
+        segments.product_item_id,
+        segments.product_title,
+        segments.product_type_l1,
+        segments.product_custom_attribute0,
+        segments.product_custom_attribute1,
+        campaign.id,
+        campaign.name,
+        metrics.cost_micros,
+        metrics.impressions,
+        metrics.clicks,
+        metrics.ctr,
+        metrics.average_cpc,
+        metrics.conversions,
+        metrics.conversions_value
+    FROM shopping_performance_view
+    WHERE {where_str}
+    ORDER BY metrics.cost_micros DESC
+    LIMIT 200
+    """
+    rows = _client.search_stream(clean_cid, query)
+    products = []
+    status_filter_up = (status_filter or "ALL").upper()
+
+    for r in rows:
+        seg = r.get("segments", {})
+        m = r.get("metrics", {})
+        c = r.get("campaign", {})
+
+        spend = float(m.get("costMicros") or 0) / 1_000_000
+        val = float(m.get("conversionsValue") or 0)
+        conv = float(m.get("conversions") or 0)
+        roas = round(val / spend, 2) if spend > 0 else 0.0
+        cpa = round(spend / conv, 2) if conv > 0 else 0.0
+
+        if roas >= 2.0:
+            p_status = "WINNER"
+        elif roas >= 1.6:
+            p_status = "PROFITABLE"
+        elif spend >= 10.0 and roas < 1.6:
+            p_status = "BLEEDING"
+        elif conv == 0 and spend > 0:
+            p_status = "ZERO_CONVERSION"
+        else:
+            p_status = "NEUTRAL"
+
+        if status_filter_up != "ALL":
+            if status_filter_up == "BLEEDING" and p_status != "BLEEDING":
+                continue
+            elif status_filter_up == "WINNER" and p_status != "WINNER":
+                continue
+            elif status_filter_up == "ZERO_CONVERSION" and p_status != "ZERO_CONVERSION":
+                continue
+            elif status_filter_up == "PROFITABLE" and p_status not in ["WINNER", "PROFITABLE"]:
+                continue
+
+        products.append({
+            "sku": seg.get("productItemId"),
+            "title": seg.get("productTitle"),
+            "product_type": seg.get("productTypeL1"),
+            "custom_label_0": seg.get("productCustomAttribute0"),
+            "custom_label_1": seg.get("productCustomAttribute1"),
+            "campaign_id": c.get("id"),
+            "campaign_name": c.get("name"),
+            "spend": round(spend, 2),
+            "impressions": int(m.get("impressions") or 0),
+            "clicks": int(m.get("clicks") or 0),
+            "ctr": round(float(m.get("ctr") or 0) * 100, 2),
+            "avg_cpc": round(float(m.get("averageCpc") or 0) / 1_000_000, 2),
+            "conversions": round(conv, 1),
+            "revenue": round(val, 2),
+            "roas": roas,
+            "cpa": cpa,
+            "health_status": p_status
+        })
+
+    # Sort
+    sort_key = (sort_by or "spend").lower()
+    if sort_key == "revenue":
+        products.sort(key=lambda x: x["revenue"], reverse=True)
+    elif sort_key == "roas":
+        products.sort(key=lambda x: x["roas"], reverse=True)
+    elif sort_key == "conversions":
+        products.sort(key=lambda x: x["conversions"], reverse=True)
+    elif sort_key == "clicks":
+        products.sort(key=lambda x: x["clicks"], reverse=True)
+    else:
+        products.sort(key=lambda x: x["spend"], reverse=True)
+
+    final_list = products[:min(int(limit or 50), 200)]
+    return {
+        "customer_id": clean_cid,
+        "date_range": date_clause,
+        "total_matched": len(products),
+        "returned_count": len(final_list),
+        "products": final_list
+    }
+
+def gads_feed_diagnostics(customer_id: str, date_range: str = "LAST_30_DAYS") -> Dict[str, Any]:
+    """Diagnose product feed distribution, budget hogs, and category breakdowns."""
+    clean_cid = customer_id.replace("-", "")
+    valid_ranges = ["TODAY", "YESTERDAY", "LAST_7_DAYS", "LAST_14_DAYS", "LAST_30_DAYS", "THIS_MONTH", "LAST_MONTH"]
+    date_clause = date_range if date_range in valid_ranges else "LAST_30_DAYS"
+
+    query = f"""
+    SELECT
+        segments.product_item_id,
+        segments.product_title,
+        segments.product_type_l1,
+        metrics.cost_micros,
+        metrics.clicks,
+        metrics.conversions,
+        metrics.conversions_value
+    FROM shopping_performance_view
+    WHERE segments.date DURING {date_clause} AND metrics.cost_micros > 0
+    ORDER BY metrics.cost_micros DESC
+    LIMIT 200
+    """
+    rows = _client.search_stream(clean_cid, query)
+
+    total_account_spend = 0.0
+    category_summary: Dict[str, Dict[str, float]] = {}
+    sku_performance = []
+
+    for r in rows:
+        seg = r.get("segments", {})
+        m = r.get("metrics", {})
+        spend = float(m.get("costMicros") or 0) / 1_000_000
+        val = float(m.get("conversionsValue") or 0)
+        conv = float(m.get("conversions") or 0)
+        cat = seg.get("productTypeL1") or "Uncategorized"
+
+        total_account_spend += spend
+
+        if cat not in category_summary:
+            category_summary[cat] = {"spend": 0.0, "revenue": 0.0, "conversions": 0.0}
+        category_summary[cat]["spend"] += spend
+        category_summary[cat]["revenue"] += val
+        category_summary[cat]["conversions"] += conv
+
+        title = seg.get("productTitle") or ""
+        sku_performance.append({
+            "sku": seg.get("productItemId"),
+            "title": title,
+            "title_length": len(title),
+            "first_70_chars": title[:70],
+            "category": cat,
+            "spend": round(spend, 2),
+            "revenue": round(val, 2),
+            "roas": round(val / spend, 2) if spend > 0 else 0.0,
+            "conversions": round(conv, 1)
+        })
+
+    # Budget hogs (SKUs taking disproportionate spend)
+    budget_hogs = []
+    for item in sku_performance:
+        share = (item["spend"] / total_account_spend * 100) if total_account_spend > 0 else 0
+        if share >= 10.0:  # Taking >= 10% of total spend
+            budget_hogs.append({
+                "sku": item["sku"],
+                "title": item["title"][:50] + "...",
+                "spend": item["spend"],
+                "spend_share_pct": round(share, 1),
+                "roas": item["roas"],
+                "is_bleeding": item["roas"] < 1.6
+            })
+
+    # Category summaries formatted
+    cat_list = []
+    for c_name, c_data in category_summary.items():
+        c_roas = round(c_data["revenue"] / c_data["spend"], 2) if c_data["spend"] > 0 else 0.0
+        cat_list.append({
+            "category": c_name,
+            "spend": round(c_data["spend"], 2),
+            "revenue": round(c_data["revenue"], 2),
+            "conversions": round(c_data["conversions"], 1),
+            "roas": c_roas
+        })
+    cat_list.sort(key=lambda x: x["spend"], reverse=True)
+
+    return {
+        "customer_id": clean_cid,
+        "date_range": date_clause,
+        "total_active_skus": len(sku_performance),
+        "total_feed_spend": round(total_account_spend, 2),
+        "category_breakdown": cat_list,
+        "budget_hogs": budget_hogs
+    }
+
 def gads_search_terms(customer_id: str, campaign_id: Optional[str] = None, date_range: str = "LAST_30_DAYS", limit: int = 50) -> Dict[str, Any]:
     """Retrieve actual search query terms from shoppers."""
     clean_cid = customer_id.replace("-", "")
@@ -329,6 +543,70 @@ SCHEMAS = {
             "required": ["customer_id"]
         }
     },
+    "gads_product_performance": {
+        "name": "gads_product_performance",
+        "description": "Analyze product/listing performance by SKU from Shopping Ads and Performance Max (shopping_performance_view). Filter by ROAS, bleeding products, or specific SKU.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "customer_id": {
+                    "type": "string",
+                    "description": "10-digit Google Ads customer ID."
+                },
+                "campaign_id": {
+                    "type": "string",
+                    "description": "Optional: Filter products within a specific campaign ID."
+                },
+                "sku": {
+                    "type": "string",
+                    "description": "Optional: Specific product SKU (product_item_id) to check."
+                },
+                "date_range": {
+                    "type": "string",
+                    "enum": ["TODAY", "YESTERDAY", "LAST_7_DAYS", "LAST_14_DAYS", "LAST_30_DAYS", "THIS_MONTH", "LAST_MONTH"],
+                    "description": "Date window (default: LAST_30_DAYS)"
+                },
+                "min_spend": {
+                    "type": "number",
+                    "description": "Minimum spend filter in USD (e.g. 10.0 to filter out trivial spend)."
+                },
+                "status_filter": {
+                    "type": "string",
+                    "enum": ["ALL", "WINNER", "PROFITABLE", "BLEEDING", "ZERO_CONVERSION"],
+                    "description": "Filter by product health: WINNER (ROAS>=2.0), PROFITABLE (ROAS>=1.6), BLEEDING (Spend>=10 and ROAS<1.6), ZERO_CONVERSION"
+                },
+                "sort_by": {
+                    "type": "string",
+                    "enum": ["spend", "revenue", "roas", "conversions", "clicks"],
+                    "description": "Sort metric (default: spend)"
+                },
+                "limit": {
+                    "type": "integer",
+                    "description": "Maximum products to return (default: 50, max: 200)"
+                }
+            },
+            "required": ["customer_id"]
+        }
+    },
+    "gads_feed_diagnostics": {
+        "name": "gads_feed_diagnostics",
+        "description": "Diagnose Shopping product feed health: category-level ROAS breakdown, identify budget hogs (SKUs eating >=10% budget), and title length audit.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "customer_id": {
+                    "type": "string",
+                    "description": "10-digit Google Ads customer ID."
+                },
+                "date_range": {
+                    "type": "string",
+                    "enum": ["TODAY", "YESTERDAY", "LAST_7_DAYS", "LAST_14_DAYS", "LAST_30_DAYS", "THIS_MONTH", "LAST_MONTH"],
+                    "description": "Date window (default: LAST_30_DAYS)"
+                }
+            },
+            "required": ["customer_id"]
+        }
+    },
     "gads_search_terms": {
         "name": "gads_search_terms",
         "description": "Analyze actual search queries entered by shoppers for an account or specific campaign.",
@@ -421,6 +699,17 @@ def register(ctx: Any) -> None:
         "gads_list_accounts": lambda args, **_: json.dumps(gads_list_accounts(args.get("status_filter", "ENABLED")), default=str),
         "gads_query": lambda args, **_: json.dumps(gads_query(args["customer_id"], args["query"]), default=str),
         "gads_campaign_performance": lambda args, **_: json.dumps(gads_campaign_performance(args["customer_id"], args.get("date_range", "LAST_30_DAYS"), args.get("status_filter", "ALL")), default=str),
+        "gads_product_performance": lambda args, **_: json.dumps(gads_product_performance(
+            customer_id=args["customer_id"],
+            campaign_id=args.get("campaign_id"),
+            sku=args.get("sku"),
+            date_range=args.get("date_range", "LAST_30_DAYS"),
+            min_spend=args.get("min_spend", 0.0),
+            status_filter=args.get("status_filter", "ALL"),
+            sort_by=args.get("sort_by", "spend"),
+            limit=args.get("limit", 50)
+        ), default=str),
+        "gads_feed_diagnostics": lambda args, **_: json.dumps(gads_feed_diagnostics(args["customer_id"], args.get("date_range", "LAST_30_DAYS")), default=str),
         "gads_search_terms": lambda args, **_: json.dumps(gads_search_terms(args["customer_id"], args.get("campaign_id"), args.get("date_range", "LAST_30_DAYS"), args.get("limit", 50)), default=str),
         "gads_draft_proposal": lambda args, **_: json.dumps(gads_draft_proposal(args["customer_id"], args["action_type"], args["title"], args["details"]), default=str),
         "gads_mutate": lambda args, **_: json.dumps(gads_mutate(args["customer_id"], args["operation"], args["params"], args.get("approved", False), args.get("approval_note", "")), default=str),
@@ -429,6 +718,8 @@ def register(ctx: Any) -> None:
         "gads_list_accounts": "🏢",
         "gads_query": "🔍",
         "gads_campaign_performance": "📊",
+        "gads_product_performance": "🏷️",
+        "gads_feed_diagnostics": "🩺",
         "gads_search_terms": "🎯",
         "gads_draft_proposal": "📝",
         "gads_mutate": "⚡",

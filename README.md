@@ -1,86 +1,64 @@
-# Hermes Google Ads Plugin
+# Hermes Google Ads Plugin (v1.1.0)
 
-A lightweight, zero-heavy-dependency Google Ads API plugin for Hermes Agent. Built entirely on standard Python libraries (`urllib`, `json`), communicating directly with **Google Ads API v22** via REST transcoding.
+Production-grade Hermes Agent plugin integrating Google Ads API v22 REST. Designed for e-commerce multi-store dropshipping/print-on-demand portfolios operating on US market via MCC (Manager Account).
 
-Designed specifically for autonomous e-commerce marketing agents and specialists operating within a multi-agent matrix organization.
+## 🌟 Key Features
 
----
-
-## Key Features
-
-1. **Native REST API v22 Integration:**
-   - Communicates with Google Ads REST endpoints directly without bulky gRPC client libraries (`google-ads` pip package).
-   - Fully resilient to the **September 9, 2026 Developer Token sunset**: supports access levels mapped directly to Google Cloud Projects while optionally maintaining developer token headers.
-2. **Multi-Account MCC Discovery:**
-   - Easily manages multiple client stores under a single Manager Account (MCC).
-   - Auto-discovers child customer IDs, currencies, timezones, and operational statuses.
-3. **High-Performance GAQL Analytics:**
-   - Runs arbitrary Google Ads Query Language (`GAQL`) queries over HTTP streaming (`searchStream`).
-   - Built-in performance reporting for Campaigns (Shopping, Performance Max, Search, Demand Gen) and Search Term Views.
-4. **Human-in-the-Loop Safe Mutation (Approval Gate):**
-   - **Lớp an toàn 1 (Draft Mode):** Campaigns and structural changes are first drafted as structured proposals in `workspace/outputs/`.
-   - **Lớp an toàn 2 (Approval Enforcement):** Live mutations via `gads_mutate` strictly require explicit authorization parameters (`approved=True` and `approval_note`).
-   - **Lớp an toàn 3 (Safety Default):** New campaigns are always instantiated with status `PAUSED`.
+1. **Product & Listing Centric (Shopping & PMax):**
+   - Deep visibility into product-level SKU metrics (`shopping_performance_view`).
+   - Identifies high-ROAS winners, zero-conversion budget burners, and bleeders (ROAS < 1.6).
+   - Category breakdowns, budget hog detection (SKUs eating >= 10% spend), and 70-character title audit.
+2. **REST API v22 (Stdlib Only):**
+   - Pure Python standard library (`urllib.request`, `json`). Zero heavy external dependencies (`google-ads` python library / gRPC not required).
+   - Resilient against Google's Developer Token sunset policy (enforced Sept 2026).
+3. **Safety First Architecture:**
+   - **Read & Analyze:** Full access to metrics, campaigns, products, and search terms.
+   - **Draft Proposals:** Generates structured proposals to `workspace/outputs/`.
+   - **Human-in-the-Loop Gate:** Mutations strictly require `approved=True` and explicit `approval_note`. New campaigns default to `PAUSED`.
 
 ---
 
-## Tool Catalog
+## 🛠️ Tool Catalog (8 Tools)
 
-| Tool | Emojis | Description | Parameters |
-|---|---|---|---|
-| `gads_list_accounts` | 🏢 | Lists all accessible customer accounts under the MCC. | `status_filter` (`ENABLED`, `CANCELED`, `ALL`) |
-| `gads_query` | 🔍 | Executes raw GAQL queries against any customer account. | `customer_id`, `query` |
-| `gads_campaign_performance` | 📊 | Pulls aggregated metrics (Spend, Revenue, ROAS, CPA, CVR, CTR). | `customer_id`, `date_range`, `status_filter` |
-| `gads_search_terms` | 🎯 | Analyzes search queries entered by shoppers for intent or negative filtering. | `customer_id`, `campaign_id`, `date_range`, `limit` |
-| `gads_draft_proposal` | 📝 | Creates structured JSON/Markdown action proposals in outputs directory. | `customer_id`, `action_type`, `title`, `details` |
-| `gads_mutate` | ⚡ | Executes approved mutations (status change, negative keywords). Enforces approval. | `customer_id`, `operation`, `params`, `approved`, `approval_note` |
+| Tool Name | Emoji | Purpose |
+|---|---|---|
+| `gads_list_accounts` | 🏢 | List all client accounts under MCC with ID, descriptive name, currency, timezone, and status. |
+| `gads_query` | 🔍 | Run arbitrary GAQL queries for ad-hoc analysis. |
+| `gads_campaign_performance` | 📊 | Aggregated campaign metrics (Spend, Revenue, Blended ROAS, CPA, CVR, CTR). |
+| `gads_product_performance` | 🏷️ | **[NEW]** Deep product SKU performance from Shopping Ads & PMax (`shopping_performance_view`). Filter by SKU, campaign, min spend, or status (`WINNER`, `PROFITABLE`, `BLEEDING`, `ZERO_CONVERSION`). |
+| `gads_feed_diagnostics` | 🩺 | **[NEW]** Product feed diagnostics: category spend breakdown, budget hogs (SKUs taking >= 10% spend), and title length audit. |
+| `gads_search_terms` | 🎯 | Search query analysis from shoppers to find converting intent and negative keywords. |
+| `gads_draft_proposal` | 📝 | Create structured optimization proposal in `outputs/` for owner review. |
+| `gads_mutate` | ⚡ | Execute mutations (pause/enable camp, add negative keywords). Requires approval. |
 
 ---
 
-## Configuration
+## ⚙️ Configuration (.env)
 
-Credentials can be provided via environment variables or profile-scoped `.env`:
+Add the following to `/root/.hermes/profiles/<profile>/.env`:
 
 ```bash
-# 1. Google Cloud OAuth 2.0 Credentials (console.cloud.google.com -> Credentials)
-GOOGLE_ADS_CLIENT_ID="your_client_id.apps.googleusercontent.com"
-GOOGLE_ADS_CLIENT_SECRET="your_client_secret"
-
-# 2. OAuth Refresh Token (long-lived token with scope https://www.googleapis.com/auth/adwords)
-GOOGLE_ADS_REFRESH_TOKEN="your_refresh_token"
-
-# 3. Manager Account / MCC ID (10 digits without dashes)
-GOOGLE_ADS_LOGIN_CUSTOMER_ID="1234567890"
-
-# 4. Optional Developer Token (supported for legacy/transition compatibility)
-GOOGLE_ADS_DEVELOPER_TOKEN="your_dev_token"
+GOOGLE_ADS_CLIENT_ID="<your-oauth-client-id>.apps.googleusercontent.com"
+GOOGLE_ADS_CLIENT_SECRET="<your-oauth-client-secret>"
+GOOGLE_ADS_REFRESH_TOKEN="<your-oauth-refresh-token>"
+GOOGLE_ADS_LOGIN_CUSTOMER_ID="<10-digit-mcc-id>"
+GOOGLE_ADS_DEVELOPER_TOKEN="<token-if-applicable>"
 ```
+
+Ensure permissions: `chmod 600 /root/.hermes/profiles/<profile>/.env`
 
 ---
 
-## Integration with Hermes Agent
+## 🚀 Installation in Hermes
 
-Enable the plugin in your profile's `config.yaml`:
-
-```yaml
-plugins:
-  enabled:
-    - google-ads
-
-platform_toolsets:
-  cli:
-    - google_ads
-  telegram:
-    - google_ads
-```
+1. Clone or place this directory under `/root/.hermes/plugins/google-ads`.
+2. Enable globally or per-profile:
+   ```bash
+   hermes plugins enable google-ads
+   ```
+3. Add `google_ads` to `platform_toolsets.cli` and `platform_toolsets.telegram` in `config.yaml`.
 
 ---
 
-## Security & Privacy
-
-- All secret tokens (`refresh_token`, `client_secret`) are resolved strictly server-side and never leaked in LLM conversational outputs.
-- Read-only queries can run autonomously; any state-changing operations require explicit human confirmation.
-
-## License
-
-MIT License. Copyright (c) 2026 DU COMMERCE LLC / Hermes Agent.
+## 📄 License
+MIT © 2026 David (ducanh98x)

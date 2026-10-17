@@ -1,0 +1,12 @@
+name: google-ads
+version: 1.0.0
+description: "Google Ads API v22 integration: Multi-account MCC reporting, GAQL queries, search terms analysis, campaign performance, and human-approved campaign mutation."
+author: "gogo"
+kind: standalone
+provides_tools:
+  - gads_list_accounts
+  - gads_query
+  - gads_campaign_performance
+  - gads_search_terms
+  - gads_draft_proposal
+  - gads_mutate

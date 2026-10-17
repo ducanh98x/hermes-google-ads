@@ -6,7 +6,10 @@ import json
 import os
 import time
 from typing import Any, Dict, List, Optional
-from google_ads_client import GoogleAdsClient
+try:
+    from .google_ads_client import GoogleAdsClient
+except ImportError:
+    from google_ads_client import GoogleAdsClient
 
 _client = GoogleAdsClient()
 
@@ -393,12 +396,55 @@ def gads_search_terms(customer_id: str, campaign_id: Optional[str] = None, date_
         })
     return {"customer_id": clean_cid, "total_terms": len(terms), "search_terms": terms}
 
+def _get_outputs_dir() -> str:
+    """Dynamically determine the outputs directory based on active profile/workspace."""
+    # 1. Workspace env vars
+    ws = (
+        os.environ.get("HERMES_WORKSPACE")
+        or os.environ.get("BH_AGENT_WORKSPACE")
+        or os.environ.get("WORKSPACE")
+    )
+    if ws:
+        target = os.path.join(ws, "outputs")
+        os.makedirs(target, exist_ok=True)
+        return target
+
+    # 2. Check current working directory
+    cwd = os.path.abspath(os.getcwd())
+    if os.path.basename(cwd) == "workspace":
+        target = os.path.join(cwd, "outputs")
+        os.makedirs(target, exist_ok=True)
+        return target
+    if os.path.isdir(os.path.join(cwd, "outputs")):
+        return os.path.join(cwd, "outputs")
+
+    # 3. Check active profile
+    profile = (
+        os.environ.get("HERMES_PROFILE")
+        or os.environ.get("HERMES_SESSION_PROFILE")
+    )
+    profiles_marker = "/.hermes/profiles/"
+    if not profile and profiles_marker in cwd:
+        parts = cwd.split(profiles_marker)[1].split("/")
+        if parts and parts[0]:
+            profile = parts[0]
+
+    if profile:
+        profile_ws = os.path.expanduser(f"~/.hermes/profiles/{profile}/workspace/outputs")
+        os.makedirs(profile_ws, exist_ok=True)
+        return profile_ws
+
+    # 4. Fallback
+    fallback = os.path.expanduser("~/.hermes/workspace/outputs")
+    os.makedirs(fallback, exist_ok=True)
+    return fallback
+
 def gads_draft_proposal(customer_id: str, action_type: str, title: str, details: Dict[str, Any]) -> Dict[str, Any]:
     """Draft a campaign action to outputs directory for Sếp approval."""
     clean_cid = customer_id.replace("-", "")
     ts = time.strftime("%Y%m%d_%H%M%S")
     proposal_id = f"gads_prop_{ts}"
-    out_dir = "/root/.hermes/profiles/gogo/workspace/outputs"
+    out_dir = _get_outputs_dir()
     os.makedirs(out_dir, exist_ok=True)
     file_path = os.path.join(out_dir, f"{proposal_id}.json")
 

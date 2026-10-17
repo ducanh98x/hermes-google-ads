@@ -17,23 +17,71 @@ TOKEN_URL = "https://oauth2.googleapis.com/token"
 
 class GoogleAdsClient:
     def __init__(self, env_path: Optional[str] = None):
-        self.env_path = env_path or "/root/.hermes/profiles/gogo/.env"
-        self._env = self._load_env()
+        self.env_path = env_path
         self._access_token: Optional[str] = None
         self._token_expiry: float = 0.0
 
+    def _find_env_candidates(self) -> List[str]:
+        candidates = []
+        if self.env_path:
+            candidates.append(self.env_path)
+
+        # 1. Active profile from environment
+        profile = (
+            os.environ.get("HERMES_PROFILE")
+            or os.environ.get("HERMES_SESSION_PROFILE")
+        )
+        if profile:
+            candidates.append(os.path.expanduser(f"~/.hermes/profiles/{profile}/.env"))
+
+        # 2. Check current working directory if inside ~/.hermes/profiles/<name>/...
+        cwd = os.path.abspath(os.getcwd())
+        profiles_marker = "/.hermes/profiles/"
+        if profiles_marker in cwd:
+            parts = cwd.split(profiles_marker)[1].split("/")
+            if parts and parts[0]:
+                p_name = parts[0]
+                candidates.append(os.path.expanduser(f"~/.hermes/profiles/{p_name}/.env"))
+
+        # 3. Check CWD and parent directory .env
+        candidates.append(os.path.join(cwd, ".env"))
+        candidates.append(os.path.join(os.path.dirname(cwd), ".env"))
+
+        # 4. Global Hermes env
+        candidates.append(os.path.expanduser("~/.hermes/.env"))
+
+        # Deduplicate preserving order
+        seen = set()
+        existing = []
+        for c in candidates:
+            c_norm = os.path.normpath(c)
+            if c_norm not in seen and os.path.isfile(c_norm):
+                seen.add(c_norm)
+                existing.append(c_norm)
+        return existing
+
     def _load_env(self) -> Dict[str, str]:
         env_vars = {}
-        if os.path.exists(self.env_path):
-            with open(self.env_path, "r", encoding="utf-8") as f:
-                for line in f:
-                    line = line.strip()
-                    if line and not line.startswith("#") and "=" in line:
-                        k, v = line.split("=", 1)
-                        env_vars[k.strip()] = v.strip().strip("'\"")
-        # Allow environment variables to override
-        for key in ["GOOGLE_ADS_CLIENT_ID", "GOOGLE_ADS_CLIENT_SECRET", "GOOGLE_ADS_REFRESH_TOKEN", "GOOGLE_ADS_LOGIN_CUSTOMER_ID", "GOOGLE_ADS_DEVELOPER_TOKEN"]:
-            if key in os.environ:
+        for path in reversed(self._find_env_candidates()):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    for line in f:
+                        line = line.strip()
+                        if line and not line.startswith("#") and "=" in line:
+                            k, v = line.split("=", 1)
+                            env_vars[k.strip()] = v.strip().strip("'\"")
+            except Exception:
+                pass
+
+        # Environment variables take highest precedence
+        for key in [
+            "GOOGLE_ADS_CLIENT_ID",
+            "GOOGLE_ADS_CLIENT_SECRET",
+            "GOOGLE_ADS_REFRESH_TOKEN",
+            "GOOGLE_ADS_LOGIN_CUSTOMER_ID",
+            "GOOGLE_ADS_DEVELOPER_TOKEN",
+        ]:
+            if os.environ.get(key):
                 env_vars[key] = os.environ[key]
         return env_vars
 

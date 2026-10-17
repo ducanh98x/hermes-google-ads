@@ -18,7 +18,12 @@ def _check() -> bool:
 
 def gads_list_accounts(status_filter: str = "ENABLED") -> Dict[str, Any]:
     """List all accounts managed under the MCC."""
-    mcc_id = _client._env.get("GOOGLE_ADS_LOGIN_CUSTOMER_ID", "").replace("-", "")
+    mcc_id = _client.get_login_customer_id()
+    if not mcc_id:
+        return {
+            "error": "GOOGLE_ADS_LOGIN_CUSTOMER_ID_MISSING",
+            "message": "Chưa cấu hình GOOGLE_ADS_LOGIN_CUSTOMER_ID trong .env. Vui lòng chạy 'python3 setup_oauth.py' hoặc điền 10 chữ số MCC ID."
+        }
     query = """
     SELECT
         customer_client.client_customer,
@@ -54,7 +59,12 @@ def gads_list_accounts(status_filter: str = "ENABLED") -> Dict[str, Any]:
 def gads_query(customer_id: str, query: str) -> Dict[str, Any]:
     """Execute arbitrary GAQL query."""
     if not customer_id:
-        customer_id = _client._env.get("GOOGLE_ADS_LOGIN_CUSTOMER_ID", "")
+        customer_id = _client.get_login_customer_id()
+    if not customer_id:
+        return {
+            "error": "CUSTOMER_ID_MISSING",
+            "message": "Cần cung cấp customer_id hoặc cấu hình GOOGLE_ADS_LOGIN_CUSTOMER_ID trong .env."
+        }
     rows = _client.search_stream(customer_id, query)
     return {"customer_id": customer_id, "row_count": len(rows), "results": rows}
 

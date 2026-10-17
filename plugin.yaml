@@ -1,5 +1,5 @@
 name: google-ads
-version: 1.1.0
+version: 1.1.2
 description: "Google Ads API v22 integration: Multi-account MCC reporting, GAQL queries, product-level SKU performance (Shopping/PMax), feed diagnostics, search terms analysis, campaign performance, and human-approved campaign mutation."
 author: "ducanh98x"
 kind: standalone

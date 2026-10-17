@@ -18,8 +18,26 @@ TOKEN_URL = "https://oauth2.googleapis.com/token"
 class GoogleAdsClient:
     def __init__(self, env_path: Optional[str] = None):
         self.env_path = env_path
+        self._env = self._load_env()
         self._access_token: Optional[str] = None
         self._token_expiry: float = 0.0
+
+    @property
+    def env(self) -> Dict[str, str]:
+        if not hasattr(self, "_env") or not self._env:
+            self._env = self._load_env()
+        return self._env
+
+    def reload_env(self) -> Dict[str, str]:
+        self._env = self._load_env()
+        return self._env
+
+    def get_login_customer_id(self) -> str:
+        val = (self.env.get("GOOGLE_ADS_LOGIN_CUSTOMER_ID") or "").replace("-", "").strip()
+        if not val:
+            self.reload_env()
+            val = (self.env.get("GOOGLE_ADS_LOGIN_CUSTOMER_ID") or "").replace("-", "").strip()
+        return val
 
     def _find_env_candidates(self) -> List[str]:
         candidates = []
@@ -86,12 +104,11 @@ class GoogleAdsClient:
         return env_vars
 
     def is_configured(self) -> bool:
-        self._env = self._load_env()
         return bool(
-            self._env.get("GOOGLE_ADS_CLIENT_ID")
-            and self._env.get("GOOGLE_ADS_CLIENT_SECRET")
-            and self._env.get("GOOGLE_ADS_REFRESH_TOKEN")
-            and self._env.get("GOOGLE_ADS_LOGIN_CUSTOMER_ID")
+            self.env.get("GOOGLE_ADS_CLIENT_ID")
+            and self.env.get("GOOGLE_ADS_CLIENT_SECRET")
+            and self.env.get("GOOGLE_ADS_REFRESH_TOKEN")
+            and self.env.get("GOOGLE_ADS_LOGIN_CUSTOMER_ID")
         )
 
     def get_access_token(self) -> str:
@@ -99,10 +116,9 @@ class GoogleAdsClient:
         if self._access_token and now < self._token_expiry - 60:
             return self._access_token
 
-        self._env = self._load_env()
-        client_id = self._env.get("GOOGLE_ADS_CLIENT_ID")
-        client_secret = self._env.get("GOOGLE_ADS_CLIENT_SECRET")
-        refresh_token = self._env.get("GOOGLE_ADS_REFRESH_TOKEN")
+        client_id = self.env.get("GOOGLE_ADS_CLIENT_ID")
+        client_secret = self.env.get("GOOGLE_ADS_CLIENT_SECRET")
+        refresh_token = self.env.get("GOOGLE_ADS_REFRESH_TOKEN")
 
         if not (client_id and client_secret and refresh_token):
             raise ValueError("Google Ads credentials incomplete in .env (missing client_id, secret, or refresh_token).")
@@ -134,11 +150,11 @@ class GoogleAdsClient:
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
-        dev_token = self._env.get("GOOGLE_ADS_DEVELOPER_TOKEN")
+        dev_token = self.env.get("GOOGLE_ADS_DEVELOPER_TOKEN")
         if dev_token:
             headers["developer-token"] = dev_token
-        
-        mcc_id = (self._env.get("GOOGLE_ADS_LOGIN_CUSTOMER_ID") or "").replace("-", "")
+
+        mcc_id = self.get_login_customer_id()
         if mcc_id:
             headers["login-customer-id"] = mcc_id
         return headers
